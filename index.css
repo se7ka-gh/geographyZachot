@@ -1,0 +1,42 @@
+@import "tailwindcss";
+
+/* Мобильная оптимизация */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Плавная прокрутка на iOS */
+.overflow-y-auto {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Предотвращение масштабирования при двойном тапе */
+button, a, input, select {
+  touch-action: manipulation;
+}
+
+/* Фикс для iOS safe area */
+@supports (padding-bottom: env(safe-area-inset-bottom)) {
+  .safe-bottom {
+    padding-bottom: env(safe-area-inset-bottom);
+  }
+  .safe-top {
+    padding-top: env(safe-area-inset-top);
+  }
+}
+
+/* Стили для тултипов стран */
+.country-tooltip {
+  background: white !important;
+  border: 2px solid #4a7c4a !important;
+  border-radius: 6px !important;
+  padding: 4px 8px !important;
+  font-weight: 600 !important;
+  font-size: 12px !important;
+  color: #2e7d32 !important;
+  box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+}
+
+.country-tooltip::before {
+  border-top-color: #4a7c4a !important;
+}

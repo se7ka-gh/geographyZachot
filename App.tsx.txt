@@ -1,0 +1,924 @@
+import { useState, useEffect, useRef, useCallback } from 'react';
+import L from 'leaflet';
+import * as topojson from 'topojson-client';
+
+// === ДАННЫЕ СТРАН ===
+interface Country {
+  name: string;
+  iso3: string;
+  numCode: string; // ISO 3166-1 numeric (для world-atlas TopoJSON)
+  capital: string;
+}
+
+const COUNTRIES: Country[] = [
+  { name: 'Антигуа и Барбуда', iso3: 'ATG', numCode: '028', capital: 'Сент-Джонс' },
+  { name: 'Аргентина', iso3: 'ARG', numCode: '032', capital: 'Буэнос-Айрес' },
+  { name: 'Багамы', iso3: 'BHS', numCode: '044', capital: 'Нассау' },
+  { name: 'Барбадос', iso3: 'BRB', numCode: '052', capital: 'Бриджтаун' },
+  { name: 'Белиз', iso3: 'BLZ', numCode: '084', capital: 'Бельмопан' },
+  { name: 'Боливия', iso3: 'BOL', numCode: '068', capital: 'Сукре' },
+  { name: 'Бразилия', iso3: 'BRA', numCode: '076', capital: 'Бразилиа' },
+  { name: 'Венесуэла', iso3: 'VEN', numCode: '862', capital: 'Каракас' },
+  { name: 'Гаити', iso3: 'HTI', numCode: '332', capital: 'Порт-о-Пренс' },
+  { name: 'Гайана', iso3: 'GUY', numCode: '328', capital: 'Джорджтаун' },
+  { name: 'Гватемала', iso3: 'GTM', numCode: '320', capital: 'Гватемала' },
+  { name: 'Гренада', iso3: 'GRD', numCode: '308', capital: 'Сент-Джорджес' },
+  { name: 'Гондурас', iso3: 'HND', numCode: '340', capital: 'Тегусигальпа' },
+  { name: 'Колумбия', iso3: 'COL', numCode: '170', capital: 'Богота' },
+  { name: 'Коста-Рика', iso3: 'CRI', numCode: '188', capital: 'Сан-Хосе' },
+  { name: 'Доминика', iso3: 'DMA', numCode: '212', capital: 'Розо' },
+  { name: 'Доминиканская Республика', iso3: 'DOM', numCode: '214', capital: 'Санто-Доминго' },
+  { name: 'Куба', iso3: 'CUB', numCode: '192', capital: 'Гавана' },
+  { name: 'Мексика', iso3: 'MEX', numCode: '484', capital: 'Мехико' },
+  { name: 'Никарагуа', iso3: 'NIC', numCode: '558', capital: 'Манагуа' },
+  { name: 'Панама', iso3: 'PAN', numCode: '591', capital: 'Панама' },
+  { name: 'Парагвай', iso3: 'PRY', numCode: '600', capital: 'Асунсьон' },
+  { name: 'Перу', iso3: 'PER', numCode: '604', capital: 'Лима' },
+  { name: 'Сальвадор', iso3: 'SLV', numCode: '222', capital: 'Сан-Сальвадор' },
+  { name: 'Сент-Китс и Невис', iso3: 'KNA', numCode: '659', capital: 'Бастер' },
+  { name: 'Сент-Люсия', iso3: 'LCA', numCode: '662', capital: 'Кастри' },
+  { name: 'Суринам', iso3: 'SUR', numCode: '740', capital: 'Парамарибо' },
+  { name: 'Тринидад и Тобаго', iso3: 'TTO', numCode: '780', capital: 'Порт-оф-Спейн' },
+  { name: 'Уругвай', iso3: 'URY', numCode: '858', capital: 'Монтевидео' },
+  { name: 'Чили', iso3: 'CHL', numCode: '152', capital: 'Сантьяго' },
+  { name: 'Эквадор', iso3: 'ECU', numCode: '218', capital: 'Кито' },
+  { name: 'Ямайка', iso3: 'JAM', numCode: '388', capital: 'Кингстон' },
+  { name: 'Сент-Винсент и Гренадины', iso3: 'VCT', numCode: '670', capital: 'Кингстаун' },
+];
+
+// Мелкие островные страны — нужен авто-zoom + маркеры
+const SMALL_ISLANDS = new Set(['ATG', 'BRB', 'DMA', 'GRD', 'KNA', 'LCA', 'VCT', 'BHS', 'TTO']);
+
+// Координаты для маркеров мелких островов (широта, долгота)
+const ISLAND_COORDS: Record<string, [number, number]> = {
+  'ATG': [17.06, -61.80],
+  'BRB': [13.19, -59.54],
+  'DMA': [15.41, -61.37],
+  'GRD': [12.11, -61.68],
+  'KNA': [17.36, -62.78],
+  'LCA': [13.91, -60.98],
+  'VCT': [12.98, -61.29],
+  'BHS': [25.03, -77.40],
+  'TTO': [10.69, -61.22],
+};
+
+// Множество числовых кодов для фильтрации GeoJSON
+const NUM_CODE_SET = new Set(COUNTRIES.map(c => c.numCode));
+// Маппинг числовой код -> iso3
+const NUM_TO_ISO3 = new Map(COUNTRIES.map(c => [c.numCode, c.iso3]));
+
+type Mode = 'study' | 'training' | 'exam';
+
+// === ПРОГРЕСС ===
+function loadProgress(): { studied: string[]; bestScore: number } {
+  try {
+    const raw = localStorage.getItem('latam-trainer-progress');
+    if (raw) return JSON.parse(raw);
+  } catch { /* ignore */ }
+  return { studied: [], bestScore: 0 };
+}
+
+function saveProgress(studied: string[], bestScore: number) {
+  localStorage.setItem('latam-trainer-progress', JSON.stringify({ studied, bestScore }));
+}
+
+// === КОМПОНЕНТ ===
+export default function App() {
+  const [mode, setMode] = useState<Mode>('study');
+  const [currentIndex, setCurrentIndex] = useState(0);
+  const [score, setScore] = useState(0);
+  const [errorQueue, setErrorQueue] = useState<string[]>([]);
+  const [isInErrorReview, setIsInErrorReview] = useState(false);
+  const [flashColor, setFlashColor] = useState<string | null>(null);
+  const [showAnswer, setShowAnswer] = useState(false);
+  const [mapError, setMapError] = useState(false);
+  const [mapLoaded, setMapLoaded] = useState(false);
+  const [mapLoading, setMapLoading] = useState(true);
+  const [progress, setProgress] = useState(loadProgress());
+  const [trainingComplete, setTrainingComplete] = useState(false);
+
+  const mapRef = useRef<L.Map | null>(null);
+  const mapContainerRef = useRef<HTMLDivElement>(null);
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const countryLayersRef = useRef<Map<string, any>>(new Map());
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const markerLayersRef = useRef<Map<string, any>>(new Map());
+
+  // Refs для актуальных значений в обработчиках Leaflet
+  const modeRef = useRef(mode);
+  const currentIndexRef = useRef(currentIndex);
+  const isInErrorReviewRef = useRef(isInErrorReview);
+  const errorQueueRef = useRef(errorQueue);
+  const showAnswerRef = useRef(showAnswer);
+  const trainingCompleteRef = useRef(trainingComplete);
+
+  useEffect(() => { modeRef.current = mode; }, [mode]);
+  useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+  useEffect(() => { isInErrorReviewRef.current = isInErrorReview; }, [isInErrorReview]);
+  useEffect(() => { errorQueueRef.current = errorQueue; }, [errorQueue]);
+  useEffect(() => { showAnswerRef.current = showAnswer; }, [showAnswer]);
+  useEffect(() => { trainingCompleteRef.current = trainingComplete; }, [trainingComplete]);
+
+  // Текущая страна
+  const currentCountry: Country | null = (() => {
+    if (mode === 'study') return COUNTRIES[currentIndex] || null;
+    if (mode === 'training') {
+      if (isInErrorReview) {
+        return COUNTRIES.find(c => c.iso3 === errorQueue[0]) || null;
+      }
+      return COUNTRIES[currentIndex] || null;
+    }
+    return null;
+  })();
+
+  // Обновление подсветки (стили без fitBounds — для mouseout)
+  const updateStyles = useCallback(() => {
+    // Сброс стилей всех стран (полигоны)
+    countryLayersRef.current.forEach((layer) => {
+      layer.setStyle({
+        fillColor: '#a8d8a8',
+        fillOpacity: 0.5,
+        color: '#4a7c4a',
+        weight: 1.5,
+      });
+    });
+
+    // Сброс стилей всех маркеров
+    markerLayersRef.current.forEach((marker) => {
+      marker.setStyle({
+        fillColor: '#a8d8a8',
+        fillOpacity: 0.8,
+        color: '#4a7c4a',
+        weight: 2,
+        radius: 8,
+      });
+    });
+
+    const curMode = modeRef.current;
+    const curShowAnswer = showAnswerRef.current;
+
+    // Подсветка в режиме "Учение"
+    if (curMode === 'study') {
+      const country = COUNTRIES[currentIndexRef.current];
+      if (country) {
+        // Подсветка полигона (если есть)
+        const layer = countryLayersRef.current.get(country.iso3);
+        if (layer) {
+          layer.setStyle({
+            fillColor: '#4caf50',
+            fillOpacity: 0.7,
+            color: '#2e7d32',
+            weight: 3,
+          });
+        }
+        // Подсветка маркера (если есть)
+        const marker = markerLayersRef.current.get(country.iso3);
+        if (marker) {
+          marker.setStyle({
+            fillColor: '#4caf50',
+            fillOpacity: 1,
+            color: '#2e7d32',
+            weight: 3,
+            radius: 12,
+          });
+        }
+      }
+    }
+
+    // Подсветка правильного ответа в тренировке
+    if (curMode === 'training' && curShowAnswer) {
+      const iq = errorQueueRef.current;
+      const ier = isInErrorReviewRef.current;
+      let country: Country | null = null;
+      if (ier) {
+        country = COUNTRIES.find(c => c.iso3 === iq[0]) || null;
+      } else {
+        country = COUNTRIES[currentIndexRef.current] || null;
+      }
+      if (country) {
+        const layer = countryLayersRef.current.get(country.iso3);
+        if (layer) {
+          layer.setStyle({
+            fillColor: '#4caf50',
+            fillOpacity: 0.8,
+            color: '#2e7d32',
+            weight: 3,
+          });
+        }
+        const marker = markerLayersRef.current.get(country.iso3);
+        if (marker) {
+          marker.setStyle({
+            fillColor: '#4caf50',
+            fillOpacity: 1,
+            color: '#2e7d32',
+            weight: 3,
+            radius: 12,
+          });
+        }
+      }
+    }
+  }, []);
+
+  // Обновление подсветки с fitBounds (для смены страны/режима)
+  const updateHighlight = useCallback(() => {
+    const map = mapRef.current;
+    if (!map) return;
+
+    updateStyles();
+
+    const curMode = modeRef.current;
+    const curShowAnswer = showAnswerRef.current;
+
+    let targetCountry: Country | null = null;
+
+    if (curMode === 'study') {
+      targetCountry = COUNTRIES[currentIndexRef.current] || null;
+    } else if (curMode === 'training' && curShowAnswer) {
+      const iq = errorQueueRef.current;
+      const ier = isInErrorReviewRef.current;
+      if (ier) {
+        targetCountry = COUNTRIES.find(c => c.iso3 === iq[0]) || null;
+      } else {
+        targetCountry = COUNTRIES[currentIndexRef.current] || null;
+      }
+    }
+
+    if (targetCountry) {
+      // Для мелких островов — используем маркер
+      if (SMALL_ISLANDS.has(targetCountry.iso3)) {
+        const marker = markerLayersRef.current.get(targetCountry.iso3);
+        if (marker) {
+          const coords = marker.getLatLng();
+          map.setView(coords, 8, { animate: true });
+        }
+      } else {
+        // Для обычных стран — fitBounds по полигону
+        const layer = countryLayersRef.current.get(targetCountry.iso3);
+        if (layer) {
+          map.fitBounds(layer.getBounds(), { maxZoom: 6, padding: [50, 50] });
+        }
+      }
+    }
+  }, [updateStyles]);
+
+  // Загрузка данных карты
+  useEffect(() => {
+    setMapLoading(true);
+    const url = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+    fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error('Network error');
+        return r.json();
+      })
+      .then(data => {
+        initMap(data);
+        setMapError(false);
+        setMapLoading(false);
+      })
+      .catch(() => {
+        setMapError(true);
+        setMapLoading(false);
+      });
+
+    return () => {
+      if (mapRef.current) {
+        mapRef.current.remove();
+        mapRef.current = null;
+      }
+    };
+  }, []);
+
+  // Инициализация карты
+  const initMap = (topoData: any) => {
+    if (!mapContainerRef.current) return;
+
+    if (mapRef.current) {
+      mapRef.current.remove();
+      mapRef.current = null;
+    }
+
+    const map = L.map(mapContainerRef.current, {
+      center: [10, -75],
+      zoom: 3,
+      minZoom: 2,
+      maxZoom: 10,
+      zoomControl: true,
+      attributionControl: false,
+    });
+
+    // Светлый фон
+    const bgPane = map.createPane('background');
+    bgPane.style.zIndex = '100';
+
+    // TopoJSON -> GeoJSON
+    const worldGeo = topojson.feature(topoData, (topoData as any).objects.countries) as any;
+
+    const latAmFeatures = worldGeo.features.filter((f: any) => NUM_CODE_SET.has(String(f.id)));
+    const otherFeatures = worldGeo.features.filter((f: any) => !NUM_CODE_SET.has(String(f.id)));
+
+    // Фон — остальные страны
+    L.geoJSON({ type: 'FeatureCollection', features: otherFeatures } as any, {
+      style: {
+        fillColor: '#e0e0e0',
+        fillOpacity: 0.5,
+        color: '#cccccc',
+        weight: 0.5,
+      },
+      pane: 'background',
+    }).addTo(map);
+
+    // Латинская Америка — интерактивные слои
+    L.geoJSON({ type: 'FeatureCollection', features: latAmFeatures } as any, {
+      style: {
+        fillColor: '#a8d8a8',
+        fillOpacity: 0.5,
+        color: '#4a7c4a',
+        weight: 1.5,
+      },
+      onEachFeature: (feature: any, layer: L.Layer) => {
+        const numCode = String(feature.id);
+        const iso3 = NUM_TO_ISO3.get(numCode);
+        if (!iso3) return; // не наша страна — пропускаем
+
+        countryLayersRef.current.set(iso3, layer);
+
+        layer.on({
+          mouseover: (e) => {
+            const l = e.target as L.Path;
+            l.setStyle({ fillOpacity: 0.8, weight: 2.5 });
+            l.bringToFront();
+          },
+          mouseout: () => {
+            updateStyles();
+          },
+          click: () => {
+            handleCountryClick(iso3);
+          },
+        });
+      },
+    }).addTo(map);
+
+    // Маркеры для мелких островных стран (чтобы были видны)
+    Object.entries(ISLAND_COORDS).forEach(([iso3, coords]) => {
+      const country = COUNTRIES.find(c => c.iso3 === iso3);
+      const marker = L.circleMarker(coords, {
+        radius: 8,
+        fillColor: '#a8d8a8',
+        fillOpacity: 0.8,
+        color: '#4a7c4a',
+        weight: 2,
+      }).addTo(map);
+
+      // Подпись на карте
+      if (country) {
+        marker.bindTooltip(country.name, {
+          permanent: false,
+          direction: 'top',
+          offset: [0, -8],
+          className: 'country-tooltip',
+        });
+      }
+
+      markerLayersRef.current.set(iso3, marker);
+
+      marker.on({
+        mouseover: () => {
+          marker.setStyle({ fillOpacity: 1, radius: 10 });
+        },
+        mouseout: () => {
+          updateStyles();
+        },
+        click: () => {
+          handleCountryClick(iso3);
+        },
+      });
+    });
+
+    mapRef.current = map;
+    setMapLoaded(true);
+
+    // Первичная подсветка с fitBounds
+    setTimeout(() => {
+      updateHighlight();
+      map.invalidateSize();
+    }, 100);
+
+    // Обработка resize (поворот устройства, изменение размера окна)
+    const handleResize = () => {
+      setTimeout(() => map.invalidateSize(), 100);
+    };
+    window.addEventListener('resize', handleResize);
+    window.addEventListener('orientationchange', handleResize);
+
+    // Cleanup будет в основном useEffect
+  };
+
+  // Обработчик клика по стране
+  const handleCountryClick = (iso3: string) => {
+    const curMode = modeRef.current;
+    if (curMode !== 'training') return;
+    if (showAnswerRef.current) return;
+    if (trainingCompleteRef.current) return;
+
+    // Определяем целевую страну
+    const iq = errorQueueRef.current;
+    const ier = isInErrorReviewRef.current;
+    let target: Country | null = null;
+    if (ier) {
+      target = COUNTRIES.find(c => c.iso3 === iq[0]) || null;
+    } else {
+      target = COUNTRIES[currentIndexRef.current] || null;
+    }
+    if (!target) return;
+
+    if (iso3 === target.iso3) {
+      // ✅ Верно
+      setFlashColor('green');
+      setScore(s => s + 1);
+      setTimeout(() => setFlashColor(null), 600);
+
+      // Сохраняем прогресс
+      setProgress(prev => {
+        const newStudied = [...new Set([...prev.studied, target!.iso3])];
+        saveProgress(newStudied, prev.bestScore);
+        return { ...prev, studied: newStudied };
+      });
+
+      setTimeout(() => advanceTraining(), 800);
+    } else {
+      // ❌ Ошибка
+      setFlashColor('red');
+      setTimeout(() => setFlashColor(null), 600);
+
+      // Подсветка кликнутой страны красным
+      const clickedLayer = countryLayersRef.current.get(iso3);
+      if (clickedLayer) {
+        clickedLayer.setStyle({
+          fillColor: '#f44336',
+          fillOpacity: 0.7,
+          color: '#b71c1c',
+          weight: 3,
+        });
+        setTimeout(() => {
+          clickedLayer.setStyle({
+            fillColor: '#a8d8a8',
+            fillOpacity: 0.5,
+            color: '#4a7c4a',
+            weight: 1.5,
+          });
+        }, 2000);
+      }
+      // Подсветка маркера красным (для мелких островов)
+      const clickedMarker = markerLayersRef.current.get(iso3);
+      if (clickedMarker) {
+        clickedMarker.setStyle({
+          fillColor: '#f44336',
+          fillOpacity: 1,
+          color: '#b71c1c',
+          weight: 3,
+          radius: 12,
+        });
+        setTimeout(() => {
+          clickedMarker.setStyle({
+            fillColor: '#a8d8a8',
+            fillOpacity: 0.8,
+            color: '#4a7c4a',
+            weight: 2,
+            radius: 8,
+          });
+        }, 2000);
+      }
+
+      // Добавляем в очередь ошибок
+      setErrorQueue(q => {
+        if (!q.includes(target!.iso3)) return [...q, target!.iso3];
+        return q;
+      });
+
+      // Показываем правильный ответ
+      setShowAnswer(true);
+      setTimeout(() => {
+        setShowAnswer(false);
+        advanceTraining();
+      }, 2000);
+    }
+  };
+
+  // Переход к следующей стране
+  const advanceTraining = () => {
+    const ier = isInErrorReviewRef.current;
+    const idx = currentIndexRef.current;
+
+    if (ier) {
+      setErrorQueue(q => {
+        const newQ = q.slice(1);
+        if (newQ.length === 0) {
+          setIsInErrorReview(false);
+          setTrainingComplete(true);
+        }
+        return newQ;
+      });
+    } else {
+      const nextIndex = idx + 1;
+      if (nextIndex >= COUNTRIES.length) {
+        // Все пройдены — проверяем ошибки
+        setErrorQueue(q => {
+          if (q.length > 0) {
+            setIsInErrorReview(true);
+          } else {
+            setTrainingComplete(true);
+          }
+          return q;
+        });
+      } else {
+        setCurrentIndex(nextIndex);
+      }
+    }
+  };
+
+  // Обновляем подсветку при изменении состояния
+  useEffect(() => {
+    if (mapLoaded && !mapError) {
+      updateHighlight();
+    }
+  }, [mode, currentIndex, isInErrorReview, errorQueue, showAnswer, mapLoaded, mapError, updateHighlight]);
+
+  // Навигация "Учение"
+  const goNext = () => {
+    if (mode === 'study' && currentIndex < COUNTRIES.length - 1) {
+      const cur = COUNTRIES[currentIndex];
+      setCurrentIndex(currentIndex + 1);
+      setProgress(prev => {
+        const newStudied = [...new Set([...prev.studied, cur.iso3])];
+        saveProgress(newStudied, prev.bestScore);
+        return { ...prev, studied: newStudied };
+      });
+    }
+  };
+
+  const goPrev = () => {
+    if (mode === 'study' && currentIndex > 0) {
+      setCurrentIndex(currentIndex - 1);
+    }
+  };
+
+  // Подсказка
+  const showHint = () => {
+    if (!currentCountry || !mapRef.current) return;
+    setScore(s => Math.max(0, s - 1));
+
+    if (SMALL_ISLANDS.has(currentCountry.iso3)) {
+      const marker = markerLayersRef.current.get(currentCountry.iso3);
+      if (marker) {
+        mapRef.current.setView(marker.getLatLng(), 8, { animate: true });
+      }
+    } else {
+      const layer = countryLayersRef.current.get(currentCountry.iso3);
+      if (layer) {
+        mapRef.current.fitBounds(layer.getBounds(), { maxZoom: 6, padding: [30, 30] });
+      }
+    }
+  };
+
+  // Смена режима
+  const switchMode = (newMode: Mode) => {
+    setMode(newMode);
+    setCurrentIndex(0);
+    setScore(0);
+    setErrorQueue([]);
+    setIsInErrorReview(false);
+    setShowAnswer(false);
+    setFlashColor(null);
+    setTrainingComplete(false);
+  };
+
+  // Сброс прогресса
+  const resetProgress = () => {
+    if (confirm('Сбросить весь прогресс изучения?')) {
+      const np = { studied: [], bestScore: 0 };
+      setProgress(np);
+      saveProgress(np.studied, np.bestScore);
+    }
+  };
+
+  // Повторная загрузка карты
+  const retryMap = () => {
+    setMapLoading(true);
+    const url = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+    fetch(url)
+      .then(r => {
+        if (!r.ok) throw new Error('Network error');
+        return r.json();
+      })
+      .then(data => {
+        initMap(data);
+        setMapError(false);
+        setMapLoading(false);
+      })
+      .catch(() => {
+        setMapError(true);
+        setMapLoading(false);
+      });
+  };
+
+  // Прогресс-бар
+  const progressText = (() => {
+    if (mode === 'study') return `Страна ${currentIndex + 1} / ${COUNTRIES.length}`;
+    if (mode === 'training') {
+      if (trainingComplete) return '🎉 Тренировка завершена!';
+      if (isInErrorReview) return `🔄 Повторение ошибок: ${errorQueue.length} осталось`;
+      return `Страна ${currentIndex + 1} / ${COUNTRIES.length}`;
+    }
+    return '';
+  })();
+
+  const progressPercent = (() => {
+    if (mode === 'study') return ((currentIndex + 1) / COUNTRIES.length) * 100;
+    if (mode === 'training') {
+      if (trainingComplete) return 100;
+      if (isInErrorReview) return ((COUNTRIES.length - errorQueue.length) / COUNTRIES.length) * 100;
+      return ((currentIndex + 1) / COUNTRIES.length) * 100;
+    }
+    return 0;
+  })();
+
+  return (
+    <div
+      className="h-[100dvh] w-screen flex flex-col overflow-hidden"
+      style={{ fontFamily: '-apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif' }}
+    >
+      {/* === КОМПАКТНАЯ ШАПКА (мобильная) === */}
+      <header
+        className="bg-white border-b border-gray-200 flex-shrink-0 z-50"
+        style={{ paddingTop: 'env(safe-area-inset-top, 0px)' }}
+      >
+        {/* Строка 1: режимы + счёт */}
+        <div className="flex items-center justify-between px-2.5 py-1.5 sm:px-4 sm:py-2.5">
+          <div className="flex gap-1 sm:gap-2">
+            <button
+              onClick={() => switchMode('study')}
+              className={`px-2.5 py-1.5 sm:px-3 rounded-lg text-xs sm:text-sm font-bold transition-all ${
+                mode === 'study'
+                  ? 'bg-blue-600 text-white shadow'
+                  : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              📖 Учение
+            </button>
+            <button
+              onClick={() => switchMode('training')}
+              className={`px-2.5 py-1.5 sm:px-3 rounded-lg text-xs sm:text-sm font-bold transition-all ${
+                mode === 'training'
+                  ? 'bg-green-600 text-white shadow'
+                  : 'bg-gray-100 text-gray-600'
+              }`}
+            >
+              🎯 Тренировка
+            </button>
+          </div>
+          <div className="flex items-center gap-1.5 sm:gap-2">
+            <span className="text-xs sm:text-sm font-bold text-gray-800">⭐{score}</span>
+            <button
+              onClick={showHint}
+              disabled={!currentCountry || trainingComplete}
+              className="w-8 h-8 sm:w-auto sm:h-auto sm:px-2.5 sm:py-1.5 flex items-center justify-center bg-amber-50 text-amber-700 border border-amber-200 rounded-lg text-sm font-bold disabled:opacity-30 disabled:cursor-not-allowed"
+              title="Подсказка (−1 очко)"
+            >
+              💡
+            </button>
+            <button
+              onClick={resetProgress}
+              className="w-8 h-8 sm:w-auto sm:h-auto sm:px-2.5 sm:py-1.5 flex items-center justify-center bg-red-50 text-red-600 border border-red-200 rounded-lg text-sm disabled:opacity-30"
+              title="Сбросить прогресс"
+            >
+              🗑️
+            </button>
+          </div>
+        </div>
+        {/* Строка 2: прогресс-бар */}
+        <div className="px-2.5 pb-1.5 sm:px-4 sm:pb-2">
+          <div className="flex justify-between items-center mb-0.5">
+            <span className="text-[10px] sm:text-xs text-gray-500 font-medium">{progressText}</span>
+            <span className="text-[10px] sm:text-xs text-gray-400">{Math.round(progressPercent)}%</span>
+          </div>
+          <div className="w-full bg-gray-100 rounded-full h-1.5 sm:h-2 overflow-hidden">
+            <div
+              className="h-full rounded-full transition-all duration-500 ease-out"
+              style={{
+                width: `${progressPercent}%`,
+                backgroundColor: mode === 'study' ? '#3b82f6' : '#22c55e',
+              }}
+            />
+          </div>
+        </div>
+      </header>
+
+      {/* === ОСНОВНОЙ КОНТЕНТ === */}
+      {/* На мобильных: карта сверху, инфо-панель снизу */}
+      {/* На sm+: инфо-панель слева, карта справа */}
+      <div className="flex-1 flex flex-col sm:flex-row overflow-hidden relative min-h-0">
+
+        {/* КАРТА — на мобильных занимает всё доступное пространство */}
+        <main className="flex-1 relative min-h-0">
+          <div
+            ref={mapContainerRef}
+            className="absolute inset-0"
+            style={{ background: '#eef2f7', cursor: 'pointer' }}
+          />
+
+          {/* Вспышка */}
+          {flashColor && (
+            <div
+              className="absolute inset-0 pointer-events-none z-20"
+              style={{
+                backgroundColor: flashColor === 'green' ? 'rgba(34,197,94,0.2)' : 'rgba(239,68,68,0.2)',
+                transition: 'opacity 0.3s',
+              }}
+            />
+          )}
+
+          {/* Загрузка */}
+          {mapLoading && !mapError && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#eef2f7]">
+              <div className="text-center p-6">
+                <div className="text-4xl sm:text-5xl mb-3 animate-bounce">🌎</div>
+                <p className="text-base sm:text-lg text-gray-700 font-bold">Загрузка карты...</p>
+              </div>
+            </div>
+          )}
+
+          {/* Ошибка загрузки */}
+          {mapError && (
+            <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/95">
+              <div className="text-center p-6">
+                <p className="text-4xl mb-3">⚠️</p>
+                <p className="text-base text-gray-800 font-bold">Не удалось загрузить карту</p>
+                <button
+                  onClick={retryMap}
+                  className="mt-4 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm"
+                >
+                  🔄 Повторить
+                </button>
+              </div>
+            </div>
+          )}
+        </main>
+
+        {/* === НИЖНЯЯ ПАНЕЛЬ НАВИГАЦИИ === */}
+        <div
+          className="
+            flex-shrink-0 bg-white border-t-2 border-gray-200
+            sm:border-t-0 sm:border-r
+            sm:w-80 lg:w-96
+            overflow-y-auto
+            sm:flex-1 sm:max-h-none
+          "
+          style={{
+            paddingBottom: 'env(safe-area-inset-bottom, 0px)',
+          }}
+        >
+          {/* РЕЖИМ: УЧЕНИЕ */}
+          {mode === 'study' && currentCountry && (
+            <div className="p-3 sm:p-4">
+              {/* Информация о стране */}
+              <div className="mb-3">
+                <p className="text-xs text-blue-600 font-bold uppercase tracking-wider mb-1">
+                  Страна {currentIndex + 1} из {COUNTRIES.length}
+                </p>
+                <h2 className="text-xl sm:text-2xl font-extrabold text-gray-900 leading-tight">
+                  {currentCountry.name}
+                </h2>
+                <p className="text-sm text-gray-600 mt-1">
+                  🏛️ Столица: <span className="font-bold text-gray-800">{currentCountry.capital}</span>
+                </p>
+              </div>
+
+              {/* Навигация */}
+              <div className="flex gap-2">
+                <button
+                  onClick={goPrev}
+                  disabled={currentIndex === 0}
+                  className="flex-1 py-3 bg-gray-100 text-gray-700 rounded-xl font-bold text-sm disabled:opacity-30 disabled:cursor-not-allowed active:bg-gray-200 transition-colors"
+                >
+                  ← Назад
+                </button>
+                <button
+                  onClick={goNext}
+                  disabled={currentIndex === COUNTRIES.length - 1}
+                  className="flex-1 py-3 bg-blue-600 text-white rounded-xl font-bold text-sm disabled:opacity-30 disabled:cursor-not-allowed active:bg-blue-700 transition-colors"
+                >
+                  Дальше →
+                </button>
+              </div>
+
+              {/* Прогресс — только на десктопе */}
+              <div className="hidden sm:block mt-4 pt-3 border-t border-gray-100">
+                <p className="text-xs text-gray-500 font-semibold mb-2 uppercase tracking-wide">Прогресс изучения:</p>
+                <div className="grid grid-cols-2 gap-1 max-h-48 overflow-y-auto pr-1">
+                  {COUNTRIES.map((c, i) => {
+                    const isStudied = progress.studied.includes(c.iso3);
+                    const isCurrent = i === currentIndex;
+                    return (
+                      <div
+                        key={c.iso3}
+                        className={`text-xs px-2 py-1 rounded truncate ${
+                          isCurrent
+                            ? 'bg-blue-600 text-white font-bold'
+                            : isStudied
+                            ? 'bg-green-50 text-green-800'
+                            : 'text-gray-400'
+                        }`}
+                      >
+                        {isStudied && !isCurrent ? '✓ ' : ''}{c.name}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* РЕЖИМ: ТРЕНИРОВКА */}
+          {mode === 'training' && !trainingComplete && currentCountry && (
+            <div className="p-3 sm:p-4">
+              {/* Задание */}
+              <div
+                className="rounded-xl p-3 border-2 transition-all duration-300 mb-3"
+                style={{
+                  backgroundColor: flashColor === 'green' ? '#dcfce7' : flashColor === 'red' ? '#fee2e2' : '#f0fdf4',
+                  borderColor: flashColor === 'green' ? '#86efac' : flashColor === 'red' ? '#fca5a5' : '#bbf7d0',
+                }}
+              >
+                <p className="text-xs font-bold uppercase tracking-wider" style={{
+                  color: isInErrorReview ? '#d97706' : '#16a34a'
+                }}>
+                  {isInErrorReview ? '🔄 Повторение ошибок' : '🎯 Найдите на карте:'}
+                </p>
+                <h2 className="text-xl sm:text-2xl font-extrabold text-gray-900 mt-1">
+                  {currentCountry.name}
+                </h2>
+                {showAnswer && (
+                  <div className="mt-2 p-2 bg-white rounded-lg border border-green-200">
+                    <p className="text-sm text-gray-700">
+                      <span className="text-green-600 font-bold">✅ Ответ:</span> {currentCountry.name}
+                    </p>
+                    <p className="text-xs text-gray-500 mt-0.5">
+                      Столица: {currentCountry.capital}
+                    </p>
+                  </div>
+                )}
+              </div>
+
+              {/* Статус очереди ошибок */}
+              {errorQueue.length > 0 && !isInErrorReview && (
+                <div className="bg-amber-50 rounded-lg p-2 border border-amber-200">
+                  <p className="text-xs text-amber-800 font-medium">
+                    ⚠️ Ошибок в очереди: <span className="font-bold">{errorQueue.length}</span>
+                  </p>
+                </div>
+              )}
+
+              {isInErrorReview && (
+                <div className="bg-orange-50 rounded-lg p-2 border border-orange-200">
+                  <p className="text-xs text-orange-800 font-medium">
+                    🔄 Повторяем ошибочные страны...
+                  </p>
+                </div>
+              )}
+            </div>
+          )}
+
+          {/* Тренировка завершена */}
+          {mode === 'training' && trainingComplete && (
+            <div className="p-3 sm:p-4">
+              <div className="bg-gradient-to-br from-green-50 to-emerald-100 rounded-xl p-4 border border-green-200 text-center">
+                <p className="text-4xl mb-2">🎉</p>
+                <h2 className="text-xl font-extrabold text-green-800">Отлично!</h2>
+                <p className="text-sm text-green-700 mt-1">Все страны найдены</p>
+                <p className="text-3xl font-black text-green-600 mt-2">{score}</p>
+                <p className="text-xs text-green-600 font-medium">очков</p>
+                <button
+                  onClick={() => switchMode('training')}
+                  className="mt-3 px-5 py-2.5 bg-green-600 text-white rounded-xl font-bold text-sm active:bg-green-700 transition-colors"
+                >
+                  🔄 Начать заново
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* РЕЖИМ: ЭКЗАМЕН (заглушка) */}
+          {mode === 'exam' && (
+            <div className="p-3 sm:p-4">
+              <div className="bg-gray-50 rounded-xl p-4 border border-gray-200 text-center">
+                <p className="text-3xl mb-2">📝</p>
+                <p className="text-sm text-gray-600 font-medium">Режим «Экзамен»</p>
+                <p className="text-xs text-gray-400 mt-1">Скоро будет доступен</p>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
