@@ -1,0 +1,610 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
+  <meta name="apple-mobile-web-app-capable" content="yes">
+  <meta name="theme-color" content="#ffffff">
+  <title>Латинская Америка: тренажёр по карте</title>
+
+  <!-- Leaflet CSS -->
+  <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css">
+
+  <!-- Tailwind CSS -->
+  <script src="https://cdn.tailwindcss.com"></script>
+
+  <style>
+    /* Базовые стили */
+    html, body, #root {
+      margin: 0;
+      padding: 0;
+      width: 100%;
+      height: 100%;
+      height: 100dvh;
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      overflow: hidden;
+      -webkit-text-size-adjust: 100%;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    body {
+      overscroll-behavior: none;
+      position: fixed;
+      width: 100%;
+    }
+
+    /* Мобильная оптимизация */
+    * {
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .overflow-y-auto {
+      -webkit-overflow-scrolling: touch;
+    }
+
+    button, a, input, select {
+      touch-action: manipulation;
+    }
+
+    /* Стили для тултипов стран */
+    .country-tooltip {
+      background: white !important;
+      border: 2px solid #4a7c4a !important;
+      border-radius: 6px !important;
+      padding: 4px 8px !important;
+      font-weight: 600 !important;
+      font-size: 12px !important;
+      color: #2e7d32 !important;
+      box-shadow: 0 2px 4px rgba(0,0,0,0.2) !important;
+    }
+
+    .country-tooltip::before {
+      border-top-color: #4a7c4a !important;
+    }
+  </style>
+</head>
+<body>
+  <div id="root"></div>
+
+  <!-- React и ReactDOM -->
+  <script crossorigin src="https://unpkg.com/react@18/umd/react.production.min.js"></script>
+  <script crossorigin src="https://unpkg.com/react-dom@18/umd/react-dom.production.min.js"></script>
+
+  <!-- Babel Standalone -->
+  <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+  <!-- Leaflet -->
+  <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+
+  <!-- TopoJSON Client -->
+  <script src="https://unpkg.com/topojson-client@3"></script>
+
+  <!-- Приложение -->
+  <script type="text/babel">
+    const { useState, useEffect, useRef, useCallback } = React;
+
+    // === ДАННЫЕ СТРАН ===
+    const COUNTRIES = [
+      { name: 'Антигуа и Барбуда', iso3: 'ATG', numCode: '028', capital: 'Сент-Джонс' },
+      { name: 'Аргентина', iso3: 'ARG', numCode: '032', capital: 'Буэнос-Айрес' },
+      { name: 'Багамы', iso3: 'BHS', numCode: '044', capital: 'Нассау' },
+      { name: 'Барбадос', iso3: 'BRB', numCode: '052', capital: 'Бриджтаун' },
+      { name: 'Белиз', iso3: 'BLZ', numCode: '084', capital: 'Бельмопан' },
+      { name: 'Боливия', iso3: 'BOL', numCode: '068', capital: 'Сукре' },
+      { name: 'Бразилия', iso3: 'BRA', numCode: '076', capital: 'Бразилиа' },
+      { name: 'Венесуэла', iso3: 'VEN', numCode: '862', capital: 'Каракас' },
+      { name: 'Гаити', iso3: 'HTI', numCode: '332', capital: 'Порт-о-Пренс' },
+      { name: 'Гайана', iso3: 'GUY', numCode: '328', capital: 'Джорджтаун' },
+      { name: 'Гватемала', iso3: 'GTM', numCode: '320', capital: 'Гватемала' },
+      { name: 'Гренада', iso3: 'GRD', numCode: '308', capital: 'Сент-Джорджес' },
+      { name: 'Гондурас', iso3: 'HND', numCode: '340', capital: 'Тегусигальпа' },
+      { name: 'Колумбия', iso3: 'COL', numCode: '170', capital: 'Богота' },
+      { name: 'Коста-Рика', iso3: 'CRI', numCode: '188', capital: 'Сан-Хосе' },
+      { name: 'Доминика', iso3: 'DMA', numCode: '212', capital: 'Розо' },
+      { name: 'Доминиканская Республика', iso3: 'DOM', numCode: '214', capital: 'Санто-Доминго' },
+      { name: 'Куба', iso3: 'CUB', numCode: '192', capital: 'Гавана' },
+      { name: 'Мексика', iso3: 'MEX', numCode: '484', capital: 'Мехико' },
+      { name: 'Никарагуа', iso3: 'NIC', numCode: '558', capital: 'Манагуа' },
+      { name: 'Панама', iso3: 'PAN', numCode: '591', capital: 'Панама' },
+      { name: 'Парагвай', iso3: 'PRY', numCode: '600', capital: 'Асунсьон' },
+      { name: 'Перу', iso3: 'PER', numCode: '604', capital: 'Лима' },
+      { name: 'Сальвадор', iso3: 'SLV', numCode: '222', capital: 'Сан-Сальвадор' },
+      { name: 'Сент-Китс и Невис', iso3: 'KNA', numCode: '659', capital: 'Бастер' },
+      { name: 'Сент-Люсия', iso3: 'LCA', numCode: '662', capital: 'Кастри' },
+      { name: 'Суринам', iso3: 'SUR', numCode: '740', capital: 'Парамарибо' },
+      { name: 'Тринидад и Тобаго', iso3: 'TTO', numCode: '780', capital: 'Порт-оф-Спейн' },
+      { name: 'Уругвай', iso3: 'URY', numCode: '858', capital: 'Монтевидео' },
+      { name: 'Чили', iso3: 'CHL', numCode: '152', capital: 'Сантьяго' },
+      { name: 'Эквадор', iso3: 'ECU', numCode: '218', capital: 'Кито' },
+      { name: 'Ямайка', iso3: 'JAM', numCode: '388', capital: 'Кингстон' },
+      { name: 'Сент-Винсент и Гренадины', iso3: 'VCT', numCode: '670', capital: 'Кингстаун' },
+    ];
+
+    const SMALL_ISLANDS = new Set(['ATG', 'BRB', 'DMA', 'GRD', 'KNA', 'LCA', 'VCT', 'BHS', 'TTO']);
+
+    const ISLAND_COORDS = {
+      'ATG': [17.06, -61.80],
+      'BRB': [13.19, -59.54],
+      'DMA': [15.41, -61.37],
+      'GRD': [12.11, -61.68],
+      'KNA': [17.36, -62.78],
+      'LCA': [13.91, -60.98],
+      'VCT': [12.98, -61.29],
+      'BHS': [25.03, -77.40],
+      'TTO': [10.69, -61.22],
+    };
+
+    const NUM_CODE_SET = new Set(COUNTRIES.map(c => c.numCode));
+    const NUM_TO_ISO3 = new Map(COUNTRIES.map(c => [c.numCode, c.iso3]));
+
+    // === КОМПОНЕНТ ===
+    // Режимы масштаба:
+    // 'auto' — подстраивается под размер страны
+    // 'static' — фиксированный зум на центр страны (настраиваемый)
+    // 'locked' — не менять позицию/зум при переключении
+    const ZOOM_MODES = ['auto', 'static', 'locked'];
+    const MIN_ZOOM = 2;
+    const MAX_ZOOM = 10;
+
+    function App() {
+      const [currentIndex, setCurrentIndex] = useState(0);
+      const [mapError, setMapError] = useState(false);
+      const [mapLoaded, setMapLoaded] = useState(false);
+      const [mapLoading, setMapLoading] = useState(true);
+
+      // Режим масштабирования
+      const [zoomMode, setZoomMode] = useState(() => {
+        try {
+          return localStorage.getItem('latam-zoom-mode') || 'auto';
+        } catch {
+          return 'auto';
+        }
+      });
+
+      // Уровень зума для статического режима
+      const [staticZoom, setStaticZoom] = useState(() => {
+        try {
+          const saved = localStorage.getItem('latam-static-zoom');
+          return saved ? parseInt(saved) : 5;
+        } catch {
+          return 5;
+        }
+      });
+
+      // Показать панель настройки зума
+      const [showZoomPanel, setShowZoomPanel] = useState(false);
+
+      const mapRef = useRef(null);
+      const mapContainerRef = useRef(null);
+      const countryLayersRef = useRef(new Map());
+      const markerLayersRef = useRef(new Map());
+
+      const currentIndexRef = useRef(currentIndex);
+      const zoomModeRef = useRef(zoomMode);
+      const staticZoomRef = useRef(staticZoom);
+
+      useEffect(() => { currentIndexRef.current = currentIndex; }, [currentIndex]);
+      useEffect(() => { zoomModeRef.current = zoomMode; }, [zoomMode]);
+      useEffect(() => { staticZoomRef.current = staticZoom; }, [staticZoom]);
+
+      // Циклическое переключение режимов: auto → static → locked → auto
+      const cycleZoomMode = () => {
+        const idx = ZOOM_MODES.indexOf(zoomMode);
+        const newMode = ZOOM_MODES[(idx + 1) % ZOOM_MODES.length];
+        setZoomMode(newMode);
+        try {
+          localStorage.setItem('latam-zoom-mode', newMode);
+        } catch {}
+      };
+
+      // Изменение уровня статического зума
+      const changeStaticZoom = (delta) => {
+        const newZoom = Math.max(MIN_ZOOM, Math.min(MAX_ZOOM, staticZoom + delta));
+        setStaticZoom(newZoom);
+        try {
+          localStorage.setItem('latam-static-zoom', String(newZoom));
+        } catch {}
+      };
+
+      const currentCountry = COUNTRIES[currentIndex] || null;
+      const nextCountry = currentIndex < COUNTRIES.length - 1 ? COUNTRIES[currentIndex + 1] : null;
+
+      const updateStyles = useCallback(() => {
+        // Сброс стилей всех стран
+        countryLayersRef.current.forEach((layer) => {
+          layer.setStyle({
+            fillColor: '#a8d8a8',
+            fillOpacity: 0.5,
+            color: '#4a7c4a',
+            weight: 1.5,
+          });
+        });
+
+        // Сброс стилей всех маркеров
+        markerLayersRef.current.forEach((marker) => {
+          marker.setStyle({
+            fillColor: '#a8d8a8',
+            fillOpacity: 0.8,
+            color: '#4a7c4a',
+            weight: 2,
+            radius: 8,
+          });
+        });
+
+        // Подсветка текущей страны
+        const country = COUNTRIES[currentIndexRef.current];
+        if (country) {
+          const layer = countryLayersRef.current.get(country.iso3);
+          if (layer) {
+            layer.setStyle({
+              fillColor: '#4caf50',
+              fillOpacity: 0.7,
+              color: '#2e7d32',
+              weight: 3,
+            });
+          }
+          const marker = markerLayersRef.current.get(country.iso3);
+          if (marker) {
+            marker.setStyle({
+              fillColor: '#4caf50',
+              fillOpacity: 1,
+              color: '#2e7d32',
+              weight: 3,
+              radius: 12,
+            });
+          }
+        }
+      }, []);
+
+      const updateHighlight = useCallback(() => {
+        const map = mapRef.current;
+        if (!map) return;
+
+        updateStyles();
+
+        const currentZoomMode = zoomModeRef.current;
+
+        // В режиме 'locked' не меняем позицию карты
+        if (currentZoomMode === 'locked') {
+          return;
+        }
+
+        const targetCountry = COUNTRIES[currentIndexRef.current] || null;
+
+        if (targetCountry) {
+          if (currentZoomMode === 'static') {
+            // Статический режим: фиксированный настраиваемый зум на центр страны
+            const zoom = staticZoomRef.current;
+            if (SMALL_ISLANDS.has(targetCountry.iso3)) {
+              const marker = markerLayersRef.current.get(targetCountry.iso3);
+              if (marker) {
+                const coords = marker.getLatLng();
+                map.setView(coords, zoom, { animate: true });
+              }
+            } else {
+              const layer = countryLayersRef.current.get(targetCountry.iso3);
+              if (layer) {
+                const bounds = layer.getBounds();
+                const center = bounds.getCenter();
+                map.setView(center, zoom, { animate: true });
+              }
+            }
+          } else {
+            // Автоматический режим: подстраивается под размер страны
+            if (SMALL_ISLANDS.has(targetCountry.iso3)) {
+              const marker = markerLayersRef.current.get(targetCountry.iso3);
+              if (marker) {
+                const coords = marker.getLatLng();
+                map.setView(coords, 8, { animate: true });
+              }
+            } else {
+              const layer = countryLayersRef.current.get(targetCountry.iso3);
+              if (layer) {
+                map.fitBounds(layer.getBounds(), { maxZoom: 6, padding: [50, 50] });
+              }
+            }
+          }
+        }
+      }, [updateStyles]);
+
+      const initMap = (topoData) => {
+        if (!mapContainerRef.current) return;
+
+        if (mapRef.current) {
+          mapRef.current.remove();
+          mapRef.current = null;
+        }
+
+        const map = L.map(mapContainerRef.current, {
+          center: [10, -75],
+          zoom: 3,
+          minZoom: 2,
+          maxZoom: 10,
+          zoomControl: true,
+          attributionControl: false,
+        });
+
+        const bgPane = map.createPane('background');
+        bgPane.style.zIndex = '100';
+
+        const worldGeo = topojson.feature(topoData, topoData.objects.countries);
+
+        const latAmFeatures = worldGeo.features.filter((f) => NUM_CODE_SET.has(String(f.id)));
+        const otherFeatures = worldGeo.features.filter((f) => !NUM_CODE_SET.has(String(f.id)));
+
+        L.geoJSON({ type: 'FeatureCollection', features: otherFeatures }, {
+          style: {
+            fillColor: '#e0e0e0',
+            fillOpacity: 0.5,
+            color: '#cccccc',
+            weight: 0.5,
+          },
+          pane: 'background',
+        }).addTo(map);
+
+        L.geoJSON({ type: 'FeatureCollection', features: latAmFeatures }, {
+          style: {
+            fillColor: '#a8d8a8',
+            fillOpacity: 0.5,
+            color: '#4a7c4a',
+            weight: 1.5,
+          },
+          onEachFeature: (feature, layer) => {
+            const numCode = String(feature.id);
+            const iso3 = NUM_TO_ISO3.get(numCode);
+            if (!iso3) return;
+
+            countryLayersRef.current.set(iso3, layer);
+
+            layer.on({
+              mouseover: (e) => {
+                const l = e.target;
+                l.setStyle({ fillOpacity: 0.8, weight: 2.5 });
+                l.bringToFront();
+              },
+              mouseout: () => {
+                updateStyles();
+              },
+            });
+          },
+        }).addTo(map);
+
+        Object.entries(ISLAND_COORDS).forEach(([iso3, coords]) => {
+          const country = COUNTRIES.find(c => c.iso3 === iso3);
+          const marker = L.circleMarker(coords, {
+            radius: 8,
+            fillColor: '#a8d8a8',
+            fillOpacity: 0.8,
+            color: '#4a7c4a',
+            weight: 2,
+          }).addTo(map);
+
+          if (country) {
+            marker.bindTooltip(country.name, {
+              permanent: false,
+              direction: 'top',
+              offset: [0, -8],
+              className: 'country-tooltip',
+            });
+          }
+
+          markerLayersRef.current.set(iso3, marker);
+
+          marker.on({
+            mouseover: () => {
+              marker.setStyle({ fillOpacity: 1, radius: 10 });
+            },
+            mouseout: () => {
+              updateStyles();
+            },
+          });
+        });
+
+        mapRef.current = map;
+        setMapLoaded(true);
+
+        setTimeout(() => {
+          updateHighlight();
+          map.invalidateSize();
+        }, 100);
+
+        const handleResize = () => {
+          setTimeout(() => map.invalidateSize(), 100);
+        };
+        window.addEventListener('resize', handleResize);
+        window.addEventListener('orientationchange', handleResize);
+      };
+
+
+
+      useEffect(() => {
+        if (mapLoaded && !mapError) {
+          updateHighlight();
+        }
+      }, [currentIndex, zoomMode, staticZoom, mapLoaded, mapError, updateHighlight]);
+
+      const goNext = () => {
+        if (currentIndex < COUNTRIES.length - 1) {
+          setCurrentIndex(currentIndex + 1);
+        }
+      };
+
+      const goPrev = () => {
+        if (currentIndex > 0) {
+          setCurrentIndex(currentIndex - 1);
+        }
+      };
+
+      const retryMap = () => {
+        setMapLoading(true);
+        const url = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+        fetch(url)
+          .then(r => {
+            if (!r.ok) throw new Error('Network error');
+            return r.json();
+          })
+          .then(data => {
+            initMap(data);
+            setMapError(false);
+            setMapLoading(false);
+          })
+          .catch(() => {
+            setMapError(true);
+            setMapLoading(false);
+          });
+      };
+
+      useEffect(() => {
+        setMapLoading(true);
+        const url = 'https://cdn.jsdelivr.net/npm/world-atlas@2/countries-110m.json';
+        fetch(url)
+          .then(r => {
+            if (!r.ok) throw new Error('Network error');
+            return r.json();
+          })
+          .then(data => {
+            initMap(data);
+            setMapError(false);
+            setMapLoading(false);
+          })
+          .catch(() => {
+            setMapError(true);
+            setMapLoading(false);
+          });
+
+        return () => {
+          if (mapRef.current) {
+            mapRef.current.remove();
+            mapRef.current = null;
+          }
+        };
+      }, []);
+
+      return (
+        <div className="h-[100dvh] w-screen flex flex-col overflow-hidden">
+          {/* Карта на весь экран */}
+          <main className="flex-1 relative min-h-0">
+            <div
+              ref={mapContainerRef}
+              className="absolute inset-0"
+              style={{ background: '#eef2f7', cursor: 'pointer' }}
+            />
+
+            {/* Панель управления масштабом */}
+            <div className="absolute top-3 right-3 z-10 flex flex-col items-end gap-2">
+              {/* Кнопка переключения режима */}
+              <button
+                onClick={cycleZoomMode}
+                className={`w-11 h-11 rounded-full shadow-lg flex items-center justify-center text-lg font-bold transition-all active:scale-95 ${
+                  zoomMode === 'locked'
+                    ? 'bg-orange-500 text-white hover:bg-orange-600'
+                    : zoomMode === 'static'
+                    ? 'bg-purple-500 text-white hover:bg-purple-600'
+                    : 'bg-white text-blue-600 border-2 border-blue-200 hover:bg-blue-50'
+                }`}
+                title={
+                  zoomMode === 'locked'
+                    ? 'Зафиксирован (не менять позицию)'
+                    : zoomMode === 'static'
+                    ? `Статический (зум ${staticZoom})`
+                    : 'Автоматический'
+                }
+              >
+                {zoomMode === 'locked' ? '📌' : zoomMode === 'static' ? '🔒' : '🔍'}
+              </button>
+
+              {/* Панель настройки зума (для static режима) */}
+              {zoomMode === 'static' && (
+                <div className="bg-white rounded-xl shadow-lg border border-gray-200 p-2 flex items-center gap-1">
+                  <button
+                    onClick={() => changeStaticZoom(-1)}
+                    disabled={staticZoom <= MIN_ZOOM}
+                    className="w-8 h-8 rounded-lg bg-gray-100 text-gray-700 font-bold text-lg disabled:opacity-30 active:bg-gray-200 flex items-center justify-center"
+                  >
+                    −
+                  </button>
+                  <span className="text-sm font-bold text-gray-700 w-6 text-center">{staticZoom}</span>
+                  <button
+                    onClick={() => changeStaticZoom(1)}
+                    disabled={staticZoom >= MAX_ZOOM}
+                    className="w-8 h-8 rounded-lg bg-gray-100 text-gray-700 font-bold text-lg disabled:opacity-30 active:bg-gray-200 flex items-center justify-center"
+                  >
+                    +
+                  </button>
+                </div>
+              )}
+            </div>
+
+            {mapLoading && !mapError && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-[#eef2f7]">
+                <div className="text-center">
+                  <div className="text-5xl mb-3 animate-bounce">🌎</div>
+                  <p className="text-lg text-gray-700 font-bold">Загрузка карты...</p>
+                </div>
+              </div>
+            )}
+
+            {mapError && (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-white/95">
+                <div className="text-center p-6">
+                  <p className="text-4xl mb-3">⚠️</p>
+                  <p className="text-base text-gray-800 font-bold">Не удалось загрузить карту</p>
+                  <button
+                    onClick={retryMap}
+                    className="mt-4 px-5 py-2.5 bg-blue-600 text-white rounded-xl font-bold text-sm"
+                  >
+                    🔄 Повторить
+                  </button>
+                </div>
+              </div>
+            )}
+          </main>
+
+          {/* Нижняя панель навигации */}
+          <div
+            className="flex-shrink-0 bg-white border-t-2 border-gray-200"
+            style={{ paddingBottom: 'env(safe-area-inset-bottom, 0px)' }}
+          >
+            <div className="p-4">
+              {currentCountry && (
+                <div>
+                  <div className="text-center mb-4">
+                    <p className="text-xs text-gray-500 mb-1">
+                      {currentIndex + 1} / {COUNTRIES.length}
+                    </p>
+                    <h2 className="text-2xl font-extrabold text-gray-900">
+                      {currentCountry.name}
+                    </h2>
+                    <p className="text-sm text-gray-600 mt-1">
+                      🏛️ {currentCountry.capital}
+                    </p>
+                  </div>
+
+                  <div className="flex gap-3">
+                    <button
+                      onClick={goPrev}
+                      disabled={currentIndex === 0}
+                      className="flex-1 py-4 bg-gray-100 text-gray-700 rounded-xl font-bold text-base disabled:opacity-30 active:bg-gray-200 transition-colors"
+                    >
+                      ← Назад
+                    </button>
+                    <button
+                      onClick={goNext}
+                      disabled={currentIndex === COUNTRIES.length - 1}
+                      className="flex-1 py-4 bg-blue-600 text-white rounded-xl font-bold text-base disabled:opacity-30 active:bg-blue-700 transition-colors"
+                    >
+                      Дальше →
+                    </button>
+                  </div>
+                </div>
+              )}
+            </div>
+          </div>
+        </div>
+      );
+    }
+
+    ReactDOM.createRoot(document.getElementById('root')).render(<App />);
+  </script>
+</body>
+</html>
